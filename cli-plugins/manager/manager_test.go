@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,9 @@ import (
 )
 
 func TestListPluginCandidates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows: plugin fixtures are created without the .exe suffix that plugin discovery requires on Windows")
+	}
 	// Populate a selection of directories with various shadowed and bogus/obscure plugin candidates.
 	// For the purposes of this test no contents is required and permissions are irrelevant.
 	dir := fs.NewDir(t, t.Name(),
@@ -83,6 +87,9 @@ func TestListPluginCandidates(t *testing.T) {
 }
 
 func TestGetPlugin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows: plugin fixtures are created without the .exe suffix that plugin discovery requires on Windows")
+	}
 	dir := fs.NewDir(t, t.Name(),
 		fs.WithFile("docker-bbb", `
 #!/bin/sh
@@ -106,6 +113,9 @@ echo '{"SchemaVersion":"0.1.0"}'`, fs.WithMode(0o777)),
 }
 
 func TestListPluginsIsSorted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows: plugin fixtures are created without the .exe suffix that plugin discovery requires on Windows")
+	}
 	dir := fs.NewDir(t, t.Name(),
 		fs.WithFile("docker-bbb", `
 #!/bin/sh

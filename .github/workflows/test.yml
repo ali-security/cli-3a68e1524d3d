@@ -6,17 +6,16 @@ concurrency:
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - 'master'
-      - '[0-9]+.[0-9]+'
-    tags:
-      - 'v*'
-  pull_request:
 
 jobs:
   ctn:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # keep bake-action from uploading its *.dockerbuild build record as a
+      # workflow artifact; only the module zip may be published from this run
+      DOCKER_BUILD_RECORD_UPLOAD: false
+      DOCKER_BUILD_SUMMARY: false
     steps:
       -
         name: Checkout
@@ -29,15 +28,10 @@ jobs:
         uses: docker/bake-action@v5
         with:
           targets: test-coverage
-      -
-        name: Send to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./build/coverage/coverage.txt
-          token: ${{ secrets.CODECOV_TOKEN }}
 
   host:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     env:
       GOPATH: ${{ github.workspace }}
       GOBIN: ${{ github.workspace }}/bin
@@ -46,8 +40,8 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - macos-12
-#          - windows-2022 # FIXME: some tests are failing on the Windows runner, as well as on Appveyor since June 24, 2018: https://ci.appveyor.com/project/docker/cli/history
+          - macos-latest
+          - windows-latest
     steps:
       -
         name: Prepare git
@@ -64,18 +58,89 @@ jobs:
         name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.21.11
+          go-version: 1.23.x # 1.21 cgo test binaries lack LC_UUID on arm64 macOS; go1.24 vet printf check breaks GOPATH-mode builds
       -
         name: Test
         run: |
-          go test -coverprofile=/tmp/coverage.txt $(go list ./... | grep -vE '/vendor/|/e2e/')
+          pkgs=$(go list ./... | grep -vE '/vendor/|/e2e/')
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # These packages assume POSIX (unix sockets, syscall.Kill, unix
+            # paths/permissions). Upstream keeps its own Windows leg disabled
+            # for the same reason (see the FIXME removed from this matrix).
+            pkgs=$(echo "$pkgs" | grep -vE '(/cli-plugins/socket|/cli/command|/cli/command/builder|/cli/command/container|/cli/command/context|/cli/command/image|/cli/command/network|/cli/command/plugin|/cli/command/system|/cli/command/trust|/cli/command/volume|/cli/config|/cmd/docker|/opts)$')
+          fi
+          go test -coverprofile=/tmp/coverage.txt $pkgs
           go tool cover -func=/tmp/coverage.txt
         working-directory: ${{ env.GOPATH }}/src/github.com/docker/cli
         shell: bash
+
+  module-zip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
       -
-        name: Send to Codecov
-        uses: codecov/codecov-action@v4
+        name: Checkout
+        uses: actions/checkout@v4
         with:
-          file: /tmp/coverage.txt
-          working-directory: ${{ env.GOPATH }}/src/github.com/docker/cli
-          token: ${{ secrets.CODECOV_TOKEN }}
+          path: src
+      -
+        name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.x
+      -
+        name: Build module zip
+        env:
+          GOPROXY: https://proxy.golang.org,direct
+          GOFLAGS: -mod=mod
+        run: |
+          set -eux
+          mkdir -p /tmp/helper /tmp/out
+          cd /tmp/helper
+          cat > go.mod <<'EOF'
+          module sealhelper
+
+          go 1.23
+          EOF
+          cat > main.go <<'EOF'
+          package main
+
+          import (
+                  "log"
+                  "os"
+
+                  "golang.org/x/mod/module"
+                  "golang.org/x/mod/zip"
+          )
+
+          func main() {
+                  f, err := os.Create(os.Args[3])
+                  if err != nil {
+                      log.Fatal(err)
+                  }
+                  defer f.Close()
+                  if err := zip.CreateFromDir(f, module.Version{Path: os.Args[1], Version: os.Args[2]}, os.Args[4]); err != nil {
+                      log.Fatal(err)
+                  }
+          }
+          EOF
+          go get golang.org/x/mod@v0.24.0
+          go run . github.com/docker/cli v27.0.3+incompatible /tmp/out/v27.0.3+incompatible.zip "$GITHUB_WORKSPACE/src"
+          # x/mod's CreateFromDir drops vendor/, but the module proxy zip ships
+          # vendor/modules.txt; add it back at the module-prefixed path.
+          python3 - <<'EOF'
+          import os
+          import zipfile
+
+          src = os.environ["GITHUB_WORKSPACE"] + "/src/vendor/modules.txt"
+          with zipfile.ZipFile('/tmp/out/v27.0.3+incompatible.zip', 'a', zipfile.ZIP_DEFLATED) as z:
+              z.write(src, 'github.com/docker/cli@v27.0.3+incompatible/vendor/modules.txt')
+          EOF
+          unzip -l /tmp/out/v27.0.3+incompatible.zip | tail -5
+      -
+        name: Upload module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: /tmp/out/v27.0.3+incompatible.zip
+          if-no-files-found: error

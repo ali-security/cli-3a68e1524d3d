@@ -3,6 +3,7 @@ package manager
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -29,6 +30,9 @@ func (c *fakeCandidate) Metadata() ([]byte, error) {
 }
 
 func TestValidateCandidate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows: test fixtures use unix plugin paths without the .exe suffix that trimExeSuffix requires")
+	}
 	const (
 		goodPluginName = NamePrefix + "goodplugin"
 
