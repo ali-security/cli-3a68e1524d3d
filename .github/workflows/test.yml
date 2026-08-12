@@ -40,7 +40,10 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - macos-latest
+          # upstream's macos-12 (Intel) image is retired; macos-15-intel is the
+          # current Intel image. The arm64 images cannot run go1.21 test binaries
+          # (every one aborts with 'dyld: missing LC_UUID load command').
+          - macos-15-intel
           - windows-latest
     steps:
       -
@@ -58,7 +61,7 @@ jobs:
         name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23.x # 1.21 cgo test binaries lack LC_UUID on arm64 macOS; go1.24 vet printf check breaks GOPATH-mode builds
+          go-version: 1.21.11
       -
         name: Test
         run: |
@@ -126,16 +129,9 @@ jobs:
           EOF
           go get golang.org/x/mod@v0.24.0
           go run . github.com/docker/cli v27.0.3+incompatible /tmp/out/v27.0.3+incompatible.zip "$GITHUB_WORKSPACE/src"
-          # x/mod's CreateFromDir drops vendor/, but the module proxy zip ships
-          # vendor/modules.txt; add it back at the module-prefixed path.
-          python3 - <<'EOF'
-          import os
-          import zipfile
-
-          src = os.environ["GITHUB_WORKSPACE"] + "/src/vendor/modules.txt"
-          with zipfile.ZipFile('/tmp/out/v27.0.3+incompatible.zip', 'a', zipfile.ZIP_DEFLATED) as z:
-              z.write(src, 'github.com/docker/cli@v27.0.3+incompatible/vendor/modules.txt')
-          EOF
+          # x/mod's CreateFromDir already includes vendor/ (incl. vendor/modules.txt),
+          # so no extra append is needed; a second write would duplicate the entry
+          # and make the zip unusable (go mod download: "multiple entries for file").
           unzip -l /tmp/out/v27.0.3+incompatible.zip | tail -5
       -
         name: Upload module zip
