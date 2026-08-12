@@ -1,0 +1,55 @@
+name: seal-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  host:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      GOPATH: ${{ github.workspace }}
+      GOBIN: ${{ github.workspace }}/bin
+      GO111MODULE: auto
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15-intel
+          - macos-13
+          - macos-latest
+          - windows-latest
+    steps:
+      -
+        name: Prepare git
+        if: matrix.os == 'windows-latest'
+        run: |
+          git config --system core.autocrlf false
+          git config --system core.eol lf
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.GOPATH }}/src/github.com/docker/cli
+      -
+        name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.21.11
+      -
+        name: Env
+        run: |
+          go version
+          go env GOARCH GOOS CGO_ENABLED
+        shell: bash
+      -
+        name: Test
+        run: |
+          pkgs=$(go list ./... | grep -vE '/vendor/|/e2e/')
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pkgs=$(echo "$pkgs" | grep -vE '(/cli-plugins/socket|/cli/command|/cli/command/builder|/cli/command/container|/cli/command/context|/cli/command/image|/cli/command/network|/cli/command/plugin|/cli/command/system|/cli/command/trust|/cli/command/volume|/cli/config|/cmd/docker|/opts)$')
+          fi
+          go test -coverprofile=/tmp/coverage.txt $pkgs
+          go tool cover -func=/tmp/coverage.txt
+        working-directory: ${{ env.GOPATH }}/src/github.com/docker/cli
+        shell: bash
